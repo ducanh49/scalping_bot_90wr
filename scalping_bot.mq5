@@ -5,74 +5,82 @@ CPositionInfo pos;
 COrderInfo ord;
 
 input group "=== Trading Inputs ==="
-input double   RiskPercent = 3; //Risk as % of Trading Capital
+input double   RiskPercent = 5; //Risk as % of Trading Capital
 input int      Tppoints = 200; //Take profit (10 points = 1 pip)
 input int      Slpoints = 200; //Stoploss points (10 points = 1 pip)
 input int      TslTriggerPoints = 15; //Points in profit before Trailing SL is activated (10 points = 1 pip)
 input int      TslPoints = 10; //Trailing Stop loss (10 points = 1 pip)
 input ENUM_TIMEFRAMES Timeframe = PERIOD_CURRENT; //Time frame to run
-input int InpMagic = 298347; //Expert advisor identification 
+input int InpMagic = 123; //Expert advisor identification 
 input string TradeComment = "Scalping Robot"; 
 
 input group "=== Telegram Settings ==="
-input string TelegramToken = ""; //Telegram Bot Token (z @BotFather)
-input string TelegramChatID = ""; //Telegram Chat ID
-input bool EnableTelegram = false; //Povolit Telegram notifikace
+input string TelegramToken = ""; // API key Botfather !!!LEAVE EMPTY IN CODE - INSERT IN INPUTS!!!
+input string TelegramChatID = ""; // Telegram group/channel chat ID !!!LEAVE EMPTY IN CODE - INSERT IN INPUTS!!!
 
 enum StartHour { S_Inactive=0, S_0100=1, S_0200=2, S_0300=3, S_0400=4, S_0500=5, S_0600=6, S_0700=7, S_0800=8, S_0900=9, S_1000=10, S_1100=11, S_1200=12, S_1300=13, S_1400=14, S_1500=15, S_1600=16, S_1700=17, S_1800=18, S_1900=19, S_2000=20, S_2100=21, S_2200=22, S_2300=23 };
-input StartHour SHInput = 0; //Start Hour
+input StartHour SHInput = 8; //Start Hour
 
 enum EndHour { E_Inactive=0, E_0100=1, E_0200=2, E_0300=3, E_0400=4, E_0500=5, E_0600=6, E_0700=7, E_0800=8, E_0900=9, E_1000=10, E_1100=11, E_1200=12, E_1300=13, E_1400=14, E_1500=15, E_1600=16, E_1700=17, E_1800=18, E_1900=19, E_2000=20, E_2100=21, E_2200=22, E_2300=23 };
-input EndHour EHInput = 0; //End Hour
+input EndHour EHInput = 21; //End Hour
 
 int SHchoice, EHChoice;
-
 int BarsN = 5;
 int ExpirationBars = 100;
 int OrderDistPoints = 100;
 
-// Pro sledování změn
-int lastPositionCount = 0;
-int lastOrderCount = 0;
+struct TradeTracking {
+   ulong ticket;
+   bool notified;
+};
+
+TradeTracking trackedPositions[];
+TradeTracking trackedOrders[];
 
 int OnInit()
 {
    trade.SetExpertMagicNumber(InpMagic);
    ChartSetInteger(0, CHART_SHOW_GRID, false);
-
-   if(EnableTelegram && (TelegramToken == "" || TelegramChatID == "")) {
-      Print("VAROVANI: Telegram je povolen, ale Token nebo ChatID není vyplněn!");
-   }
-
-   if(EnableTelegram && TelegramToken != "" && TelegramChatID != "") {
-      SendTelegramMessage("Bot startovan\n\nSymbol: " + _Symbol + "\nTimeframe: " + EnumToString(Timeframe) + "\nRisk: " + DoubleToString(RiskPercent, 1) + "%\nTP: " + IntegerToString(Tppoints/10) + " pips\nSL: " + IntegerToString(Slpoints/10) + " pips");
-   }
-
+   
+   string startMsg = "🤖 *Trading Bot Started*\n\n";
+   startMsg += "Symbol: " + _Symbol + "\n";
+   startMsg += "Timeframe: " + EnumToString(Timeframe) + "\n";
+   startMsg += "Magic: " + IntegerToString(InpMagic) + "\n";
+   startMsg += "Risk: " + DoubleToString(RiskPercent, 1) + "%\n";
+   startMsg += "TP: " + IntegerToString(Tppoints) + " | SL: " + IntegerToString(Slpoints) + "\n";
+   startMsg += "Trading Hours: " + IntegerToString(SHInput) + ":00 - " + IntegerToString(EHInput) + ":00";
+   
+   SendTelegramMessage(startMsg);
+   
    return(INIT_SUCCEEDED);
 }
 
 void OnDeinit(const int reason)
 {
-   if(EnableTelegram) {
-      string deinitReason = "";
-      switch(reason) {
-         case REASON_PROGRAM: deinitReason = "Program stopped"; break;
-         case REASON_REMOVE: deinitReason = "EA removed from chart"; break;
-         case REASON_RECOMPILE: deinitReason = "Recompiled"; break;
-         case REASON_CHARTCHANGE: deinitReason = "Chart changed"; break;
-         case REASON_CHARTCLOSE: deinitReason = "Chart closed"; break;
-         case REASON_PARAMETERS: deinitReason = "Parameters changed"; break;
-         case REASON_ACCOUNT: deinitReason = "Account changed"; break;
-         default: deinitReason = "Unknown reason"; break;
-      }
-      SendTelegramMessage("Bot zastaven\n\nDuvod: " + deinitReason);
+   string msg = "⚠️ *Bot Stopped*\n\n";
+   msg += "Reason: ";
+   
+   switch(reason) {
+      case REASON_PROGRAM: msg += "Program terminated"; break;
+      case REASON_REMOVE: msg += "EA removed from chart"; break;
+      case REASON_RECOMPILE: msg += "EA recompiled"; break;
+      case REASON_CHARTCHANGE: msg += "Symbol/timeframe changed"; break;
+      case REASON_CHARTCLOSE: msg += "Chart closed"; break;
+      case REASON_PARAMETERS: msg += "Parameters changed"; break;
+      case REASON_ACCOUNT: msg += "Account changed"; break;
+      case REASON_TEMPLATE: msg += "Template loaded"; break;
+      case REASON_INITFAILED: msg += "Initialization failed"; break;
+      case REASON_CLOSE: msg += "Terminal closed"; break;
+      default: msg += "Unknown (" + IntegerToString(reason) + ")";
    }
+   
+   SendTelegramMessage(msg);
 }
 
 void OnTick()
 {
    TrailStop();
-   CheckPositionChanges();
+   CheckTradeEvents();
 
    if(!IsNewBar()) return;
 
@@ -111,103 +119,241 @@ void OnTick()
    }
 }
 
-void CheckPositionChanges() {
-   int currentPosCount = CountPositions();
-   int currentOrdCount = CountOrders();
-
-   if(currentPosCount < lastPositionCount) CheckClosedPositions();
-   if(currentPosCount > lastPositionCount && currentOrdCount < lastOrderCount) SendPositionActivatedAlert();
-
-   lastPositionCount = currentPosCount;
-   lastOrderCount = currentOrdCount;
+void CheckTradeEvents() {
+   CheckNewPositions();
+   CheckClosedPositions();
+   CheckNewOrders();
+   CheckDeletedOrders();
 }
 
-int CountPositions() {
-   int count = 0;
+void CheckNewPositions() {
    for(int i = PositionsTotal()-1; i>=0; i--) {
       if(pos.SelectByIndex(i)) {
-         if(pos.Symbol()==_Symbol && pos.Magic()==InpMagic) count++;
-      }
-   }
-   return count;
-}
-
-int CountOrders() {
-   int count = 0;
-   for(int i = OrdersTotal()-1; i>=0; i--) {
-      if(ord.SelectByIndex(i)) {
-         if(ord.Symbol()==_Symbol && ord.Magic()==InpMagic) count++;
-      }
-   }
-   return count;
-}
-
-void CheckClosedPositions() {
-   HistorySelect(TimeCurrent() - 86400, TimeCurrent());
-   for (int i = HistoryDealsTotal() - 1; i >= 0; i--) {
-      ulong ticket = HistoryDealGetTicket(i);
-      if (HistoryDealGetString(ticket, DEAL_SYMBOL) == _Symbol &&
-          HistoryDealGetInteger(ticket, DEAL_MAGIC) == InpMagic &&
-          HistoryDealGetInteger(ticket, DEAL_ENTRY) == DEAL_ENTRY_OUT) {
-
-         double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
-         double entryPrice = HistoryDealGetDouble(ticket, DEAL_PRICE);
-         double lots = HistoryDealGetDouble(ticket, DEAL_VOLUME);
-         double sl = HistoryDealGetDouble(ticket, DEAL_SL);
-         double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-         double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-         double pointValue = tickValue / tickSize;
-
-         // Spočítat riskovanou částku (pokud SL existuje)
-         double riskAmount = 0.0;
-         if (sl > 0)
-            riskAmount = MathAbs(entryPrice - sl) * pointValue * lots;
-         else
-            riskAmount = AccountInfoDouble(ACCOUNT_BALANCE) * (RiskPercent / 100.0); // fallback, pokud SL chybí
-
-         double profitPercent = 0.0;
-         if (riskAmount > 0)
-            profitPercent = (profit / riskAmount) * 100.0;
-
-         double closePrice = HistoryDealGetDouble(ticket, DEAL_PRICE);
-         string result = (profit >= 0) ? "✅ PROFIT" : "❌ LOSS";
-
-         string message;
-         message = result + "\n";
-         message += "Symbol: " + _Symbol + "\n";
-         message += "Closed at: " + TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS) + "\n";
-         message += "Close Price: " + DoubleToString(closePrice, _Digits) + "\n";
-         message += "Profit/Loss: " + DoubleToString(profitPercent, 2) + " %";
-
-         SendTelegramMessage(message);
-         break;
-      }
-   }
-}
-
-
-
-void SendPositionActivatedAlert() {
-   for(int i=PositionsTotal()-1; i>=0; i--) {
-      if(pos.SelectByIndex(i)) {
          if(pos.Symbol()==_Symbol && pos.Magic()==InpMagic) {
-            string type = pos.PositionType() == POSITION_TYPE_BUY ? "Long" : "Short";
-            string arrow = pos.PositionType() == POSITION_TYPE_BUY ? "🟢" : "🔴";
+            ulong ticket = pos.Ticket();
             
-            string message;
-            message = arrow + " " + type + " trade opened at " + TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS) + "\n";
-            message += "Symbol: " + _Symbol + "\n";
-            message += "Entry: " + DoubleToString(pos.PriceOpen(), _Digits) + "\n";
-            message += "Take Profit: " + DoubleToString(pos.TakeProfit(), _Digits) + "\n";
-            message += "Stop Loss: " + DoubleToString(pos.StopLoss(), _Digits);
-            
-            SendTelegramMessage(message);
-            break;
+            if(!IsPositionTracked(ticket)) {
+               AddTrackedPosition(ticket);
+               
+               string msg = "✅ *Trade Opened*\n\n";
+               msg += "Symbol: " + pos.Symbol() + "\n";
+               msg += "Type: " + (pos.PositionType()==POSITION_TYPE_BUY ? "BUY 🟢" : "SELL 🔴") + "\n";
+               msg += "Entry: " + DoubleToString(pos.PriceOpen(), _Digits) + "\n";
+               msg += "Lots: " + DoubleToString(pos.Volume(), 2) + "\n";
+               msg += "SL: " + DoubleToString(pos.StopLoss(), _Digits) + "\n";
+               msg += "TP: " + DoubleToString(pos.TakeProfit(), _Digits) + "\n";
+               msg += "Ticket: " + IntegerToString(ticket);
+               
+               SendTelegramMessage(msg);
+            }
          }
       }
    }
 }
 
+void CheckClosedPositions() {
+   for(int i = ArraySize(trackedPositions)-1; i>=0; i--) {
+      bool found = false;
+      
+      for(int j = PositionsTotal()-1; j>=0; j--) {
+         if(pos.SelectByIndex(j)) {
+            if(pos.Ticket() == trackedPositions[i].ticket) {
+               found = true;
+               break;
+            }
+         }
+      }
+      
+      if(!found) {
+         ulong ticket = trackedPositions[i].ticket;
+         
+         if(HistorySelectByPosition(ticket)) {
+            for(int h = HistoryDealsTotal()-1; h>=0; h--) {
+               ulong dealTicket = HistoryDealGetTicket(h);
+               
+               if(HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID) == ticket) {
+                  double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+                  double volume = HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
+                  double price = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+                  ENUM_DEAL_REASON reason = (ENUM_DEAL_REASON)HistoryDealGetInteger(dealTicket, DEAL_REASON);
+                  
+                  string msg = (profit >= 0 ? "💰 *Trade Closed - Profit*\n\n" : "❌ *Trade Closed - Loss*\n\n");
+                  msg += "Ticket: " + IntegerToString(ticket) + "\n";
+                  msg += "Exit: " + DoubleToString(price, _Digits) + "\n";
+                  msg += "Lots: " + DoubleToString(volume, 2) + "\n";
+                  msg += "P/L: " + DoubleToString(profit, 2) + " " + AccountInfoString(ACCOUNT_CURRENCY) + "\n";
+                  msg += "Reason: " + GetDealReasonText(reason);
+                  
+                  SendTelegramMessage(msg);
+                  break;
+               }
+            }
+         }
+         
+         RemoveTrackedPosition(i);
+      }
+   }
+}
+
+void CheckNewOrders() {
+   for(int i = OrdersTotal()-1; i>=0; i--) {
+      if(ord.SelectByIndex(i)) {
+         if(ord.Symbol()==_Symbol && ord.Magic()==InpMagic) {
+            ulong ticket = ord.Ticket();
+            
+            if(!IsOrderTracked(ticket)) {
+               AddTrackedOrder(ticket);
+               
+               string msg = "📋 *New Pending Order*\n\n";
+               msg += "Symbol: " + ord.Symbol() + "\n";
+               msg += "Type: " + GetOrderTypeText(ord.OrderType()) + "\n";
+               msg += "Entry: " + DoubleToString(ord.PriceOpen(), _Digits) + "\n";
+               msg += "Lots: " + DoubleToString(ord.VolumeInitial(), 2) + "\n";
+               msg += "SL: " + DoubleToString(ord.StopLoss(), _Digits) + "\n";
+               msg += "TP: " + DoubleToString(ord.TakeProfit(), _Digits) + "\n";
+               msg += "Expiry: " + TimeToString(ord.TimeExpiration()) + "\n";
+               msg += "Ticket: " + IntegerToString(ticket);
+               
+               SendTelegramMessage(msg);
+            }
+         }
+      }
+   }
+}
+
+void CheckDeletedOrders() {
+   for(int i = ArraySize(trackedOrders)-1; i>=0; i--) {
+      bool found = false;
+      
+      for(int j = OrdersTotal()-1; j>=0; j--) {
+         if(ord.SelectByIndex(j)) {
+            if(ord.Ticket() == trackedOrders[i].ticket) {
+               found = true;
+               break;
+            }
+         }
+      }
+      
+      if(!found) {
+         ulong ticket = trackedOrders[i].ticket;
+         
+         string msg = "🗑️ *Order Deleted*\n\n";
+         msg += "Ticket: " + IntegerToString(ticket) + "\n";
+         
+         if(HistoryOrderSelect(ticket)) {
+            ENUM_ORDER_STATE state = (ENUM_ORDER_STATE)HistoryOrderGetInteger(ticket, ORDER_STATE);
+            msg += "Reason: " + GetOrderStateText(state);
+         } else {
+            msg += "Reason: Order not found in history";
+         }
+         
+         SendTelegramMessage(msg);
+         RemoveTrackedOrder(i);
+      }
+   }
+}
+
+string GetOrderTypeText(ENUM_ORDER_TYPE type) {
+   switch(type) {
+      case ORDER_TYPE_BUY_STOP: return "BUY STOP 🟢⬆️";
+      case ORDER_TYPE_SELL_STOP: return "SELL STOP 🔴⬇️";
+      case ORDER_TYPE_BUY_LIMIT: return "BUY LIMIT 🟢⬇️";
+      case ORDER_TYPE_SELL_LIMIT: return "SELL LIMIT 🔴⬆️";
+      default: return "UNKNOWN";
+   }
+}
+
+string GetDealReasonText(ENUM_DEAL_REASON reason) {
+   switch(reason) {
+      case DEAL_REASON_SL: return "Stop Loss";
+      case DEAL_REASON_TP: return "Take Profit";
+      case DEAL_REASON_SO: return "Stop Out";
+      case DEAL_REASON_EXPERT: return "EA Closed";
+      default: return "Manual/Other";
+   }
+}
+
+string GetOrderStateText(ENUM_ORDER_STATE state) {
+   switch(state) {
+      case ORDER_STATE_CANCELED: return "Canceled";
+      case ORDER_STATE_EXPIRED: return "Expired";
+      case ORDER_STATE_FILLED: return "Filled";
+      case ORDER_STATE_REJECTED: return "Rejected";
+      default: return "Unknown";
+   }
+}
+
+bool IsPositionTracked(ulong ticket) {
+   for(int i=0; i<ArraySize(trackedPositions); i++) {
+      if(trackedPositions[i].ticket == ticket) return true;
+   }
+   return false;
+}
+
+bool IsOrderTracked(ulong ticket) {
+   for(int i=0; i<ArraySize(trackedOrders); i++) {
+      if(trackedOrders[i].ticket == ticket) return true;
+   }
+   return false;
+}
+
+void AddTrackedPosition(ulong ticket) {
+   int size = ArraySize(trackedPositions);
+   ArrayResize(trackedPositions, size+1);
+   trackedPositions[size].ticket = ticket;
+   trackedPositions[size].notified = true;
+}
+
+void AddTrackedOrder(ulong ticket) {
+   int size = ArraySize(trackedOrders);
+   ArrayResize(trackedOrders, size+1);
+   trackedOrders[size].ticket = ticket;
+   trackedOrders[size].notified = true;
+}
+
+void RemoveTrackedPosition(int index) {
+   int size = ArraySize(trackedPositions);
+   if(index < 0 || index >= size) return;
+   
+   for(int i=index; i<size-1; i++) {
+      trackedPositions[i] = trackedPositions[i+1];
+   }
+   ArrayResize(trackedPositions, size-1);
+}
+
+void RemoveTrackedOrder(int index) {
+   int size = ArraySize(trackedOrders);
+   if(index < 0 || index >= size) return;
+   
+   for(int i=index; i<size-1; i++) {
+      trackedOrders[i] = trackedOrders[i+1];
+   }
+   ArrayResize(trackedOrders, size-1);
+}
+
+void SendTelegramMessage(string text) {
+   if(TelegramToken == "" || TelegramChatID == "") {
+      Print("Telegram not configured!");
+      return;
+   }
+   
+   string url = "https://api.telegram.org/bot" + TelegramToken + "/sendMessage";
+   
+   string postData = "chat_id=" + TelegramChatID + "&text=" + text + "&parse_mode=Markdown";
+   
+   char data[];
+   char result[];
+   string headers;
+   
+   ArrayResize(data, StringToCharArray(postData, data, 0, WHOLE_ARRAY, CP_UTF8)-1);
+   
+   int res = WebRequest("POST", url, NULL, NULL, 5000, data, 0, result, headers);
+   
+   if(res == -1) {
+      Print("WebRequest error: ", GetLastError());
+      Print("Enable URL in MT5: Tools -> Options -> Expert Advisors -> Allow WebRequest for URL: https://api.telegram.org");
+   }
+}
 
 double findHigh() 
 {
@@ -244,7 +390,7 @@ bool IsNewBar()
    static datetime previousTime = 0;
    datetime currentTime = iTime(_Symbol, Timeframe, 0);
    if(previousTime != currentTime) {
-      previousTime =  currentTime;
+      previousTime = currentTime;
       return true;
    }
    return false;
@@ -257,26 +403,14 @@ void SendBuyOrder(double entry)
    
    double tp = entry + Tppoints * _Point;
    double sl = entry - Slpoints * _Point;
-   
    double lots = 0.01;
+   
    if(RiskPercent > 0) lots = calcLots(entry-sl);
    
    datetime expiration = iTime(_Symbol, Timeframe, 0) + ExpirationBars * PeriodSeconds(Timeframe);
    
-   if(trade.BuyStop(lots, entry, _Symbol, sl, tp, ORDER_TIME_SPECIFIED, expiration)) {
-      if(EnableTelegram) {
-         string message;
-         message = "📈 Signal: Long trade open order at " + DoubleToString(entry, _Digits) + "\n\n";
-         message += "Symbol: " + _Symbol + "\n";
-         message += "Recommended Take Profit: " + DoubleToString(tp, _Digits) + "\n";
-         message += "Recommended Stop Loss: " + DoubleToString(sl, _Digits) + "\n";
-         message += "Order expires: " + TimeToString(expiration, TIME_DATE|TIME_MINUTES);
-         
-         SendTelegramMessage(message);
-      }
-   }
+   trade.BuyStop(lots, entry, _Symbol, sl, tp, ORDER_TIME_SPECIFIED, expiration);
 }
-
 
 void SendSellOrder(double entry) 
 {
@@ -291,95 +425,46 @@ void SendSellOrder(double entry)
    
    datetime expiration = iTime(_Symbol, Timeframe, 0) + ExpirationBars * PeriodSeconds(Timeframe);
    
-   if(trade.SellStop(lots, entry, _Symbol, sl, tp, ORDER_TIME_SPECIFIED, expiration)) {
-      if(EnableTelegram) {
-         string message;
-         message = "📉 Signal: Short trade open order at " + DoubleToString(entry, _Digits) + "\n\n";
-         message += "Symbol: " + _Symbol + "\n";
-         message += "Recommended Take Profit: " + DoubleToString(tp, _Digits) + "\n";
-         message += "Recommended Stop Loss: " + DoubleToString(sl, _Digits) + "\n";
-         message += "Order expires: " + TimeToString(expiration, TIME_DATE|TIME_MINUTES);
-         
-         SendTelegramMessage(message);
-      }
-   }
+   trade.SellStop(lots, entry, _Symbol, sl, tp, ORDER_TIME_SPECIFIED, expiration);
 }
-
 
 double calcLots(double slPoints) 
 {
-   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double risk = balance * RiskPercent / 100;
+   double risk = AccountInfoDouble(ACCOUNT_BALANCE) * RiskPercent / 100;
    
    double ticksize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
    double tickvalue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
    double loststep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-   double minvolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   double maxvolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double minvolume = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+   double maxvolume = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
    double volumelimit = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_LIMIT);
    
-   // Kontrola leverage
-   long leverage = AccountInfoInteger(ACCOUNT_LEVERAGE);
-   
-   // Výpočet
    double moneyPerLotstep = slPoints / ticksize * tickvalue * loststep;
+   double lots = MathFloor(risk / moneyPerLotstep) * loststep;
    
-   // OPRAVA: Použití MathRound místo MathFloor pro lepší přesnost
-   double lots = MathRound(risk / moneyPerLotstep) * loststep;
-   
-   // Alternativně pro konzervativnější přístup:
-   // double lots = MathFloor(risk / moneyPerLotstep) * loststep;
-   
-   // Aplikace limitů
    if(volumelimit != 0) lots = MathMin(lots, volumelimit);
-   if(maxvolume != 0) lots = MathMin(lots, maxvolume);
-   if(minvolume != 0) lots = MathMax(lots, minvolume);
-   
+   if(maxvolume != 0) lots = MathMin(lots, SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX));
+   if(minvolume != 0) lots = MathMax(lots, SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN));
    lots = NormalizeDouble(lots, 2);
-   
-   // DŮLEŽITÉ: Kontrola, zda lot není příliš malý
-   if(lots < minvolume) {
-      Print("VAROVÁNÍ: Vypočtený lot (", lots, ") je menší než minimální (", minvolume, ")");
-      Print("  Balance: ", balance, " | Risk: ", risk, " | Leverage: 1:", leverage);
-      Print("  SL Points: ", slPoints, " | Money per lot: ", moneyPerLotstep);
-      Print("  Použit minimální lot: ", minvolume);
-      lots = minvolume;
-   }
-   
-   // Kontrola dostupného margin
-   double price = (SymbolInfoDouble(_Symbol, SYMBOL_ASK) + SymbolInfoDouble(_Symbol, SYMBOL_BID)) / 2;
-   double margin_required = 0;
-   
-   if(OrderCalcMargin(ORDER_TYPE_BUY, _Symbol, lots, price, margin_required)) {
-      double free_margin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-      
-      if(margin_required > free_margin) {
-         Print("VAROVÁNÍ: Nedostatečný margin!");
-         Print("  Požadovaný margin: ", margin_required, " | Volný margin: ", free_margin);
-         Print("  Lot redukován z ", lots);
-         
-         // Přepočet lotu podle dostupného marginu
-         lots = lots * (free_margin / margin_required) * 0.95; // 95% pro bezpečnost
-         lots = MathFloor(lots / loststep) * loststep;
-         lots = MathMax(lots, minvolume);
-         lots = NormalizeDouble(lots, 2);
-         
-         Print("  Na: ", lots);
-      }
-   }
-   
-   Print("Finální lot size: ", lots, " (Risk: ", DoubleToString(RiskPercent,1), "%, Leverage: 1:", leverage, ")");
    
    return lots;
 }
 
 void CloseAllOrders() {
+   int deletedCount = 0;
+   
    for(int i = OrdersTotal()-1; i >= 0; i--) {
       ord.SelectByIndex(i);
       ulong ticket = ord.Ticket();
       if(ord.Symbol() == _Symbol && ord.Magic() == InpMagic) {
-         trade.OrderDelete(ticket);
+         if(trade.OrderDelete(ticket)) deletedCount++;
       }
+   }
+   
+   if(deletedCount > 0) {
+      string msg = "⏰ *Trading Hours Ended*\n\n";
+      msg += "Orders Deleted: " + IntegerToString(deletedCount);
+      SendTelegramMessage(msg);
    }
 }
 
@@ -403,7 +488,10 @@ void TrailStop() {
                   
                   if(sl > pos.StopLoss() && sl!=0){
                      if(trade.PositionModify(ticket, sl, tp)) {
-                        // Trailing SL změněn
+                        string msg = "🔄 *Trailing Stop Activated*\n\n";
+                        msg += "Ticket: " + IntegerToString(ticket) + "\n";
+                        msg += "New SL: " + DoubleToString(sl, _Digits);
+                        SendTelegramMessage(msg);
                      }
                   }
                }
@@ -414,7 +502,10 @@ void TrailStop() {
                   sl = ask + (TslPoints * _Point);
                   if(sl<pos.StopLoss() && sl!=0){
                      if(trade.PositionModify(ticket,sl,tp)) {
-                        // Trailing SL změněn
+                        string msg = "🔄 *Trailing Stop Activated*\n\n";
+                        msg += "Ticket: " + IntegerToString(ticket) + "\n";
+                        msg += "New SL: " + DoubleToString(sl, _Digits);
+                        SendTelegramMessage(msg);
                      }
                   }
                }
@@ -422,74 +513,4 @@ void TrailStop() {
          }
       }
    }
-}
-
-// ============= TELEGRAM FUNKCE =============
-
-void SendTelegramMessage(string message) {
-   if(!EnableTelegram || TelegramToken == "" || TelegramChatID == "") return;
-   
-   string url = "https://api.telegram.org/bot" + TelegramToken + "/sendMessage";
-   
-   string jsonMessage = message;
-   StringReplace(jsonMessage, "\\", "\\\\");
-   StringReplace(jsonMessage, "\"", "\\\"");
-   StringReplace(jsonMessage, "\n", "\\n");
-   StringReplace(jsonMessage, "\r", "\\r");
-   
-   string json = "{\"chat_id\":\"" + TelegramChatID + "\",\"text\":\"" + jsonMessage + "\"}";
-   
-   Print("Sending JSON: ", json);
-   
-   char post[], result[];
-   string headers = "Content-Type: application/json; charset=utf-8\r\n";
-   
-   int size = StringToCharArray(json, post, 0, WHOLE_ARRAY, CP_UTF8);
-   ArrayResize(post, size - 1);
-   
-   Print("Array size: ", ArraySize(post));
-   
-   int timeout = 5000;
-   int res = WebRequest("POST", url, headers, timeout, post, result, headers);
-   
-   if(res == -1) {
-      int error = GetLastError();
-      Print("Telegram Error: ", error);
-      Print("Pridej URL do whitelistu: Tools → Options → Expert Advisors");
-      Print("URL: https://api.telegram.org");
-   }
-   else if(res == 200) {
-      Print("Telegram message sent successfully");
-   }
-   else {
-      Print("Telegram Response Code: ", res);
-      string resultStr = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
-      Print("Response: ", resultStr);
-   }
-}
-
-string UrlEncode(string str) {
-   string result = "";
-   for(int i = 0; i < StringLen(str); i++) {
-      ushort char_code = StringGetCharacter(str, i);
-      string char_str = ShortToString(char_code);
-      
-      if((char_code >= 48 && char_code <= 57) ||
-         (char_code >= 65 && char_code <= 90) ||
-         (char_code >= 97 && char_code <= 122) ||
-         char_code == 45 || char_code == 46 ||
-         char_code == 95 || char_code == 126) {
-         result += char_str;
-      }
-      else if(char_code == 32) {
-         result += "+";
-      }
-      else if(char_code == 10) {
-         result += "%0A";
-      }
-      else {
-         result += StringFormat("%%%02X", char_code);
-      }
-   }
-   return result;
 }
